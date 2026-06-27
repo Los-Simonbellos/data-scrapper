@@ -30,10 +30,27 @@ Query params:
   times without an offset are read as Venezuelan time (UTC-04:00).
 - `raw=true` — return raw Supabase rows instead of normalized.
 
-### Auth (optional)
+### Auth (API key)
 
 Set `SERVICE_API_KEYS` (comma-separated) to require callers to send a matching
-`X-API-Key` header. Leave empty for an open endpoint.
+key, either as an `X-API-Key` header or `Authorization: Bearer <key>`. Keys are
+compared in constant time. Generate one with:
+
+```bash
+python -c "import secrets; print(secrets.token_urlsafe(32))"
+```
+
+```bash
+curl -H "X-API-Key: <your-key>" http://127.0.0.1:8000/api/patients
+```
+
+Behaviour when no keys are configured is controlled by `SERVICE_REQUIRE_API_KEY`:
+
+- `false` (default) — endpoint is **open**.
+- `true` — endpoint **fails closed** (every request returns `401`), so a
+  deploy that forgets to set keys is never accidentally public.
+
+The `/` health check stays open regardless.
 
 ## Local development
 
@@ -61,7 +78,8 @@ vercel --prod
 
 `vercel.json` routes all traffic to `config/wsgi.py` via `@vercel/python`.
 Set the same env vars (`SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SERVICE_API_KEYS`,
-`DJANGO_SECRET_KEY`, `DJANGO_DEBUG=false`) in the Vercel dashboard.
+`SERVICE_REQUIRE_API_KEY`, `DJANGO_SECRET_KEY`, `DJANGO_DEBUG=false`) in the
+Vercel dashboard.
 
 > Vercel's Python runtime targets **3.12**. The code is 3.9+ compatible.
 

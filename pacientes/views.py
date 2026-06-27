@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+import secrets
 
 from django.conf import settings
 from django.http import JsonResponse
@@ -32,13 +33,31 @@ def _truthy(value: str | None) -> bool:
     return (value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _provided_api_key(request) -> str:
+    """Extract the caller's key from `X-API-Key` or `Authorization: Bearer`."""
+    key = request.headers.get("X-API-Key", "").strip()
+    if key:
+        return key
+    auth = request.headers.get("Authorization", "").strip()
+    if auth.lower().startswith("bearer "):
+        return auth[len("bearer "):].strip()
+    return ""
+
+
 def _check_api_key(request) -> bool:
     """Return True if the request is authorized (or auth is disabled)."""
     allowed = settings.SERVICE_API_KEYS
     if not allowed:
-        return True  # open endpoint
-    provided = request.headers.get("X-API-Key", "")
-    return provided in allowed
+        # No keys configured. When the operator has demanded auth
+        # (SERVICE_REQUIRE_API_KEY=true) fail closed so a misconfigured
+        # deploy never silently exposes the endpoint; otherwise stay open.
+        return not settings.SERVICE_REQUIRE_API_KEY
+    provided = _provided_api_key(request)
+    if not provided:
+        return False
+    # Constant-time compare against every configured key to avoid leaking,
+    # via response timing, how much of a key a guess got right.
+    return any(secrets.compare_digest(provided, key) for key in allowed)
 
 
 def _unauthorized() -> JsonResponse:

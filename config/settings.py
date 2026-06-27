@@ -68,7 +68,13 @@ SUPABASE_ANON_KEY = os.environ.get(
 )
 SUPABASE_TABLE = os.environ.get("SUPABASE_TABLE", "pacientes")
 
-# Optional API-key gate. Comma-separated keys; empty => open endpoint.
+# API-key gate. Comma-separated keys callers send via the `X-API-Key`
+# header (or `Authorization: Bearer <key>`).
 SERVICE_API_KEYS = [
     k.strip() for k in os.environ.get("SERVICE_API_KEYS", "").split(",") if k.strip()
 ]
+# When true, requests are rejected unless a valid key is supplied. With no
+# keys configured this fails closed (everything 401), preventing an
+# accidentally open deploy. When false, an empty SERVICE_API_KEYS means the
+# endpoint stays open.
+SERVICE_REQUIRE_API_KEY = _env_bool("SERVICE_REQUIRE_API_KEY", False)
