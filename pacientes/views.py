@@ -1,0 +1,155 @@
+"""
+HTTP endpoints.
+
+    GET /                  -> health check
+    GET /api/patients      -> normalized patient records as JSON
+
+Query params:
+    active=false   include soft-deleted rows (default: active only)
+    since=<datetime>  keep only rows whose latest timestamp (updated_at when
+                      set, otherwise created_at) is strictly more recent than
+                      the given ISO-8601 datetime. Times without an explicit
+                      offset are read as Venezuelan time (UTC-04:00).
+                      (e.g. since=2026-06-25T14:30:00)
+    raw=true       return raw Supabase rows instead of normalized
+"""
+from __future__ import annotations
+
+import datetime as dt
+import logging
+
+from django.conf import settings
+from django.http import JsonResponse
+from django.utils.dateparse import parse_datetime
+
+from .normalize import normalize_many
+from .supabase import SupabaseError, fetch_patients
+
+logger = logging.getLogger(__name__)
+
+
+def _truthy(value: str | None) -> bool:
+    return (value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _check_api_key(request) -> bool:
+    """Return True if the request is authorized (or auth is disabled)."""
+    allowed = settings.SERVICE_API_KEYS
+    if not allowed:
+        return True  # open endpoint
+    provided = request.headers.get("X-API-Key", "")
+    return provided in allowed
+
+
+def _unauthorized() -> JsonResponse:
+    resp = JsonResponse({"error": "unauthorized", "detail": "Missing or invalid X-API-Key."}, status=401)
+    return resp
+
+
+# All times are interpreted as Venezuelan time (UTC-04:00, no DST).
+VENEZUELA_TZ = dt.timezone(dt.timedelta(hours=-4))
+
+
+def _parse_datetime(value: str | None) -> dt.datetime | None:
+    """Parse an ISO-8601 datetime, returning None when blank/invalid.
+
+    A naive datetime is treated as Venezuelan time so it can be compared
+    against the timezone-aware timestamps Supabase returns.
+    """
+    if not value or not value.strip():
+        return None
+    parsed = parse_datetime(value.strip())
+    if parsed is None:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=VENEZUELA_TZ)
+    return parsed
+
+
+def _row_timestamp(row: dict) -> dt.datetime | None:
+    """The row's most recent timestamp: updated_at when set, else created_at."""
+    return _parse_datetime(row.get("updated_at")) or _parse_datetime(
+        row.get("created_at")
+    )
+
+
+def _filter_since(rows: list[dict], since: dt.datetime) -> list[dict]:
+    """Keep only rows whose latest timestamp is strictly newer than `since`."""
+    kept = []
+    for row in rows:
+        ts = _row_timestamp(row)
+        if ts is not None and ts > since:
+            kept.append(row)
+    return kept
+
+
+def health(request):
+    return JsonResponse(
+        {
+            "service": "registro-pacientes-scraper",
+            "status": "ok",
+            "source": settings.SUPABASE_URL,
+            "table": settings.SUPABASE_TABLE,
+            "endpoints": ["/api/patients"],
+        }
+    )
+
+
+def _load(request):
+    """Shared fetch + normalize. Returns (records, active_only, error_response)."""
+    # Active rows only, unless the caller explicitly passes active=false.
+    active_only = request.GET.get("active", "true").strip().lower() != "false"
+
+    # Optional `since` filter: only rows newer than the supplied datetime.
+    since_raw = request.GET.get("since")
+    since = _parse_datetime(since_raw)
+    if since_raw and since_raw.strip() and since is None:
+        return None, None, JsonResponse(
+            {
+                "error": "invalid_parameter",
+                "detail": "Query param 'since' must be an ISO-8601 datetime, "
+                "e.g. 2026-06-25T14:30:00 (Venezuelan time assumed when no "
+                "offset is given).",
+            },
+            status=400,
+        )
+
+    try:
+        rows = fetch_patients(active_only=active_only)
+    except SupabaseError as exc:
+        logger.exception("Upstream Supabase error")
+        return None, None, JsonResponse(
+            {"error": "upstream_error", "detail": str(exc)}, status=502
+        )
+    except Exception as exc:  # network/timeout/etc.
+        logger.exception("Unexpected error fetching patients")
+        return None, None, JsonResponse(
+            {"error": "internal_error", "detail": str(exc)}, status=500
+        )
+
+    if since is not None:
+        rows = _filter_since(rows, since)
+
+    return rows, active_only, None
+
+
+def patients_json(request):
+    if not _check_api_key(request):
+        return _unauthorized()
+
+    rows, active_only, error = _load(request)
+    if error:
+        return error
+
+    if _truthy(request.GET.get("raw")):
+        data = rows
+    else:
+        data = normalize_many(rows)
+
+    return JsonResponse(
+        {
+            "count": len(data),
+            "active_only": active_only,
+            "results": data,
+        }
+    )
