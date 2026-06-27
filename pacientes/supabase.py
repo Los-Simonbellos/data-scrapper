@@ -48,7 +48,12 @@ def iter_patients(active_only: bool = True) -> Iterator[dict]:
     base_url = f"{settings.SUPABASE_URL}/rest/v1/{settings.SUPABASE_TABLE}"
     params = {
         "select": "*",
-        "order": "created_at.desc",
+        # created_at is not unique, so a bare created_at.desc sort is not a
+        # total order: tied rows come back in an arbitrary order that differs
+        # between the per-page Range requests, causing offset pagination to
+        # duplicate some rows and silently skip others. The unique id makes
+        # the sort deterministic so paging is stable.
+        "order": "created_at.desc,id.desc",
     }
     if active_only:
         params["deleted_at"] = "is.null"
