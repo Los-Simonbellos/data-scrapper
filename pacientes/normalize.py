@@ -120,3 +120,43 @@ def normalize_vr_patient(row: dict, split: dict) -> dict:
 
 def normalize_vr_many(rows: list[dict], splits: list[dict]) -> list[dict]:
     return [normalize_vr_patient(r, s) for r, s in zip(rows, splits)]
+
+
+# ---------------------------------------------------------------------------
+# tuia911 normalization
+# ---------------------------------------------------------------------------
+
+def _build_tuia_direccion(referencia: str | None, municipio: str | None, estado_geo: str | None) -> str | None:
+    parts = [p for p in [referencia, municipio, estado_geo] if p]
+    return ", ".join(parts) if parts else None
+
+
+def normalize_tuia_patient(row: dict, split: dict) -> dict:
+    """Map a tuia911 row to the established output schema."""
+    return {
+        "id":              row.get("id"),
+        "fuente":          "tuia911",
+        "nombres":         split.get("nombres") or None,
+        "apellidos":       split.get("apellidos") or None,
+        "cedula":          None,
+        "edad":            row.get("edad"),
+        "genero":          row.get("genero"),
+        "estado":          "desconocido",
+        "direccion":       _build_tuia_direccion(
+                               row.get("referencia"),
+                               row.get("municipio"),
+                               row.get("estado_geo"),
+                           ),
+        "hospitalDestino": None,
+        "notas":           row.get("descripcion"),
+        "telefono":        None,
+        "createdAt":       _to_venezuela(row.get("created_at")),
+        "updatedAt":       None,
+        "deleted_at":      None,
+        "foto_url":        row.get("foto_url"),
+        "estado_registro": row.get("estado_registro"),
+    }
+
+
+def normalize_tuia_many(rows: list[dict], splits: list[dict]) -> list[dict]:
+    return [normalize_tuia_patient(r, s) for r, s in zip(rows, splits)]

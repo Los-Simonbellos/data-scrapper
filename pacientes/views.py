@@ -24,8 +24,9 @@ from django.http import JsonResponse
 from django.utils.dateparse import parse_datetime
 
 from .gemini import split_names
-from .normalize import normalize_many, normalize_vr_many
+from .normalize import normalize_many, normalize_tuia_many, normalize_vr_many
 from .supabase import SupabaseError, fetch_patients
+from .tuia911 import TuiaError, fetch_tuia_patients
 from .venezreporta import VRError, fetch_vr_patients
 
 logger = logging.getLogger(__name__)
@@ -172,22 +173,40 @@ def patients_json(request):
 
     if vr_rows:
         splits = split_names(vr_rows)
-        # Filter records Gemini flagged as test/fake data
         real_pairs = [(r, s) for r, s in zip(vr_rows, splits) if s is not None]
         real_vr_rows = [r for r, _ in real_pairs]
-        real_splits  = [s for _, s in real_pairs]
+        real_vr_splits = [s for _, s in real_pairs]
         if len(vr_rows) - len(real_vr_rows):
-            logger.info(
-                "Gemini discarded %d test/fake VR records",
-                len(vr_rows) - len(real_vr_rows),
-            )
+            logger.info("Gemini discarded %d test/fake VR records", len(vr_rows) - len(real_vr_rows))
     else:
-        real_vr_rows, real_splits = [], []
+        real_vr_rows, real_vr_splits = [], []
+
+    # --- tuia911: always last 10 minutes, tipo=encontrada, no location filter ---
+    tuia_since = dt.datetime.now(VENEZUELA_TZ) - dt.timedelta(minutes=10)
+    try:
+        tuia_rows = fetch_tuia_patients(since=tuia_since)
+    except (TuiaError, Exception) as exc:
+        logger.warning("tuia911 fetch failed, omitting from response: %s", exc)
+        tuia_rows = []
+
+    if tuia_rows:
+        tuia_splits = split_names(tuia_rows)
+        tuia_pairs = [(r, s) for r, s in zip(tuia_rows, tuia_splits) if s is not None]
+        real_tuia_rows   = [r for r, _ in tuia_pairs]
+        real_tuia_splits = [s for _, s in tuia_pairs]
+        if len(tuia_rows) - len(real_tuia_rows):
+            logger.info("Gemini discarded %d test/fake tuia911 records", len(tuia_rows) - len(real_tuia_rows))
+    else:
+        real_tuia_rows, real_tuia_splits = [], []
 
     if _truthy(request.GET.get("raw")):
-        data = rows + real_vr_rows
+        data = rows + real_vr_rows + tuia_rows
     else:
-        data = normalize_many(rows) + normalize_vr_many(real_vr_rows, real_splits)
+        data = (
+            normalize_many(rows)
+            + normalize_vr_many(real_vr_rows, real_vr_splits)
+            + normalize_tuia_many(real_tuia_rows, real_tuia_splits)
+        )
 
     return JsonResponse(
         {
