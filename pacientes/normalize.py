@@ -72,8 +72,51 @@ def normalize_patient(row: dict) -> dict:
     for key in TIMESTAMP_KEYS:
         if key in out:
             out[key] = _to_venezuela(out[key])
+    out["fuente"] = "supabase"
     return out
 
 
 def normalize_many(rows: list[dict]) -> list[dict]:
     return [normalize_patient(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# VenezuelaReporta normalization
+# ---------------------------------------------------------------------------
+
+def _build_direccion(ciudad: str | None, zona: str | None) -> str | None:
+    parts = [p for p in [ciudad, zona] if p]
+    return ", ".join(parts) if parts else None
+
+
+def normalize_vr_patient(row: dict, split: dict) -> dict:
+    """Map a VenezuelaReporta row to the established output schema."""
+    ciudad = row.get("ciudad") or None
+    zona = row.get("zona") or None
+    return {
+        "id":             row.get("id"),
+        "fuente":         "venezreporta",
+        "status":         row.get("status"),
+        "nombres":        split.get("nombres") or None,
+        "apellidos":      split.get("apellidos") or None,
+        "cedula":         row.get("cedula"),
+        "edad":           row.get("edad"),
+        "genero":         row.get("genero"),
+        "estado":         "desconocido",
+        "direccion":      _build_direccion(ciudad, zona),
+        "hospitalDestino": row.get("ultima_vez"),
+        "notas":          row.get("descripcion"),
+        "telefono":       None,
+        "createdAt":      _to_venezuela(row.get("created_at")),
+        "updatedAt":      None,
+        "deleted_at":     None,
+        "foto_url":       row.get("foto_url"),
+        "ficha_url":      row.get("ficha_url"),
+        "verificado":     row.get("verificado"),
+        "verificado_por": row.get("verificado_por"),
+        "verificado_at":  row.get("verificado_at"),
+    }
+
+
+def normalize_vr_many(rows: list[dict], splits: list[dict]) -> list[dict]:
+    return [normalize_vr_patient(r, s) for r, s in zip(rows, splits)]

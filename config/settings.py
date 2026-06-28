@@ -78,3 +78,8 @@ SERVICE_API_KEYS = [
 # accidentally open deploy. When false, an empty SERVICE_API_KEYS means the
 # endpoint stays open.
 SERVICE_REQUIRE_API_KEY = _env_bool("SERVICE_REQUIRE_API_KEY", False)
+
+# Gemini (Google AI) — used to split VenezuelaReporta full names into
+# nombres/apellidos and to detect test records. If empty, the service
+# degrades gracefully: VR records are returned with apellidos=null.
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")

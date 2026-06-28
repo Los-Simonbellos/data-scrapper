@@ -23,8 +23,10 @@ from django.conf import settings
 from django.http import JsonResponse
 from django.utils.dateparse import parse_datetime
 
-from .normalize import normalize_many
+from .gemini import split_names
+from .normalize import normalize_many, normalize_vr_many
 from .supabase import SupabaseError, fetch_patients
+from .venezreporta import VRError, fetch_vr_patients
 
 logger = logging.getLogger(__name__)
 
@@ -160,10 +162,32 @@ def patients_json(request):
     if error:
         return error
 
-    if _truthy(request.GET.get("raw")):
-        data = rows
+    # --- VenezuelaReporta: always last 10 minutes, status=encontrado ---
+    vr_since = dt.datetime.now(VENEZUELA_TZ) - dt.timedelta(minutes=10)
+    try:
+        vr_rows = fetch_vr_patients(since=vr_since)
+    except (VRError, Exception) as exc:
+        logger.warning("VenezuelaReporta fetch failed, omitting from response: %s", exc)
+        vr_rows = []
+
+    if vr_rows:
+        splits = split_names(vr_rows)
+        # Filter records Gemini flagged as test/fake data
+        real_pairs = [(r, s) for r, s in zip(vr_rows, splits) if s is not None]
+        real_vr_rows = [r for r, _ in real_pairs]
+        real_splits  = [s for _, s in real_pairs]
+        if len(vr_rows) - len(real_vr_rows):
+            logger.info(
+                "Gemini discarded %d test/fake VR records",
+                len(vr_rows) - len(real_vr_rows),
+            )
     else:
-        data = normalize_many(rows)
+        real_vr_rows, real_splits = [], []
+
+    if _truthy(request.GET.get("raw")):
+        data = rows + real_vr_rows
+    else:
+        data = normalize_many(rows) + normalize_vr_many(real_vr_rows, real_splits)
 
     return JsonResponse(
         {
